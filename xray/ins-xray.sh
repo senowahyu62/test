@@ -52,26 +52,73 @@ touch /var/log/xray/error2.log
 # / / Ambil Xray Core Version Terbaru
 bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install -u www-data --version 1.6.1
 
-## crt xray
-systemctl stop nginx
-mkdir /root/.acme.sh
-curl https://acme-install.netlify.app/acme.sh -o /root/.acme.sh/acme.sh
-chmod +x /root/.acme.sh/acme.sh
-/root/.acme.sh/acme.sh --upgrade --auto-upgrade
-/root/.acme.sh/acme.sh --set-default-ca --server letsencrypt
-/root/.acme.sh/acme.sh --issue -d $domain --standalone -k ec-256
-~/.acme.sh/acme.sh --installcert -d $domain --fullchainpath /etc/xray/xray.crt --keypath /etc/xray/xray.key --ecc
+install_ssl(){
+    if [ -f "/usr/bin/apt-get" ];then
+            isDebian=`cat /etc/issue|grep Debian`
+            if [ "$isDebian" != "" ];then
+                    apt install -y net-tools
+                    sleep 3s
+            else
+                    apt install -y net-tools
+                    sleep 3s
+            fi
+    else
+        yum install -y epel-release
+        yum install -y net-tools
+        sleep 3s
+    fi
 
-# nginx renew ssl
-echo -n '#!/bin/bash
-/etc/init.d/nginx stop
-"/root/.acme.sh"/acme.sh --cron --home "/root/.acme.sh" &> /root/renew_ssl.log
-/etc/init.d/nginx start
-/etc/init.d/nginx status
-' > /usr/local/bin/ssl_renew.sh
-chmod +x /usr/local/bin/ssl_renew.sh
-if ! grep -q 'ssl_renew.sh' /var/spool/cron/crontabs/root;then (crontab -l;echo "15 03 */3 * * /usr/local/bin/ssl_renew.sh") | crontab;fi
+    isPort=`netstat -ntlp| grep -E ':80 |:443 '`
+    if [ "$isPort" != "" ];then
+            clear
+            echo " ================================================== "
+            echo " Port 80 or 443 is occupied, please release the port before running this script"
+            echo
+            echo " Port occupancy information is as follows："
+            echo $isPort
+            echo " ================================================== "
+            exit 1
+    fi
 
+ip=$(wget -qO- ipv4.icanhazip.com)
+domain_ip=$(ping "${domain}" -c 1 | sed '1{s/[^(]*(//;s/).*//;q}')
+if [[ ${domain_ip} == "${ip}" ]]; then
+	echo -e "IP matched with the server. The installation will continue."
+	sleep 2
+	clear
+else
+	echo -e "IP does not match with the server. Make sure to point A record to your server."
+	echo -e ""
+	exit 1
+fi
+    
+    if [ -f "/usr/bin/apt-get" ];then
+            isDebian=`cat /etc/issue|grep Debian`
+            if [ "$isDebian" != "" ];then
+                    apt install -y snapd
+                    snap install core; snap refresh core
+                    snap install --classic certbot
+                    ln -s /snap/bin/certbot /usr/bin/certbot
+                    echo "Y" | certbot certonly --renew-by-default --register-unsafely-without-email --standalone -d $domain
+                    echo -e "0 2 1 * * /usr/bin/certbot renew --pre-hook \"service nginx stop\" --post-hook \"service nginx start\"" >> /var/spool/cron/crontabs/root
+                    systemctl restart cron.service
+                    sleep 3s
+            else
+                    apt install -y certbot
+                    echo "A" | certbot certonly --renew-by-default --register-unsafely-without-email --standalone -d $domain
+                    echo -e "0 2 1 * * /usr/bin/certbot renew --pre-hook \"service nginx stop\" --post-hook \"service nginx start\"" >> /var/spool/cron/crontabs/root
+                    systemctl restart cron.service
+                    sleep 3s
+            fi
+    else
+        yum install -y certbot
+        echo "Y" | certbot certonly --renew-by-default --register-unsafely-without-email --standalone -d $domain
+        echo -e "0 2 1 * * /usr/bin/certbot renew --pre-hook \"service nginx stop\" --post-hook \"service nginx start\"" >> /var/spool/cron/root
+        systemctl restart crond.service
+        sleep 3s
+    fi
+}
+install_ssl
 mkdir -p /home/vps/public_html
 
 # set uuid
@@ -375,8 +422,8 @@ cat >/etc/nginx/conf.d/xray.conf <<EOF
              listen 443 ssl http2 reuseport;
              listen [::]:443 http2 reuseport;	
              server_name *.$domain;
-             ssl_certificate /etc/xray/xray.crt;
-             ssl_certificate_key /etc/xray/xray.key;
+             ssl_certificate /etc/letsencrypt/live/$domain/fullchain.pem;
+             ssl_certificate_key //etc/letsencrypt/live/$domain/privkey.pem;
              ssl_ciphers EECDH+CHACHA20:EECDH+CHACHA20-draft:EECDH+ECDSA+AES128:EECDH+aRSA+AES128:RSA+AES128:EECDH+ECDSA+AES256:EECDH+aRSA+AES256:RSA+AES256:EECDH+ECDSA+3DES:EECDH+aRSA+3DES:RSA+3DES:!MD5;
              ssl_protocols TLSv1.1 TLSv1.2 TLSv1.3;
              root /home/vps/public_html;
